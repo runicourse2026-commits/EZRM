@@ -14,7 +14,7 @@ export default function TripLogPage() {
   const { t } = useLang();
   const { user } = useAuth();
   const { ready, profile } = useRequireRole('driver');
-  const picker = useTruckPicker(user?.uid);
+  const picker = useTruckPicker(user?.uid, { restrict: true });
   const { save, saving, status, error, saved } = useSaveLog();
 
   const [origin, setOrigin] = useState('');

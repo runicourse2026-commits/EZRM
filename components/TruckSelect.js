@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Select } from './Fields';
 import { useLang } from '@/lib/i18n';
-import { fetchTrucks, getLastTruckId, setLastTruckId } from '@/lib/db';
+import { fetchDriverTruckIds, fetchTrucks, getLastTruckId, setLastTruckId } from '@/lib/db';
 
 /**
  * Loads the truck list once and pre-selects whichever truck this user picked
  * last time — drivers stay on the same vehicle for weeks, so re-choosing it on
  * every form is pure friction. They can still change it freely.
+ *
+ * With `restrict: true`, the list is narrowed to whatever the manager assigned
+ * this uid in the `driverTrucks` collection. A driver with no assignment yet
+ * (or an empty one) still sees every truck — nothing breaks before the manager
+ * gets around to assigning anyone.
  */
-export function useTruckPicker(uid) {
+export function useTruckPicker(uid, { restrict = false } = {}) {
   const [trucks, setTrucks] = useState([]);
   const [truckId, setTruckId] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    fetchTrucks()
-      .then((list) => {
+    Promise.all([fetchTrucks(), restrict ? fetchDriverTruckIds(uid) : Promise.resolve([])])
+      .then(([allTrucks, assignedIds]) => {
         if (cancelled) return;
+        const list = assignedIds.length
+          ? allTrucks.filter((truck) => assignedIds.includes(truck.id))
+          : allTrucks;
         setTrucks(list);
         const remembered = getLastTruckId(uid);
         const exists = list.some((truck) => truck.id === remembered);
@@ -31,7 +39,7 @@ export function useTruckPicker(uid) {
     return () => {
       cancelled = true;
     };
-  }, [uid]);
+  }, [uid, restrict]);
 
   const truck = useMemo(() => trucks.find((tr) => tr.id === truckId) ?? null, [trucks, truckId]);
 

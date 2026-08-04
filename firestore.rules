@@ -36,6 +36,13 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // Which trucks a driver may pick from. Anyone signed in can read (a driver
+    // reads their own), only the manager sets it.
+    match /driverTrucks/{uid} {
+      allow read: if signedIn();
+      allow write: if isManager();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
