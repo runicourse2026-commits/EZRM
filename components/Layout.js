@@ -59,6 +59,14 @@ export default function Layout({ title, subtitle, back, children }) {
           <span>
             {profile.name} · {t(profile.role)}
           </span>
+          <span className="spacer" />
+          <button
+            type="button"
+            className="subbar-link"
+            onClick={() => router.push('/account/password')}
+          >
+            🔑 {t('changePassword')}
+          </button>
         </div>
       )}
 

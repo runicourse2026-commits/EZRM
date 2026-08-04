@@ -20,6 +20,12 @@ export default function ManagerHome() {
           hint={t('managePayments')}
           href="/manager/payments"
         />
+        <MenuItem
+          icon="👷"
+          label={t('staffAccounts')}
+          hint={t('manageStaffAccounts')}
+          href="/manager/users"
+        />
       </div>
     </Layout>
   );

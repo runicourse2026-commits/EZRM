@@ -111,6 +111,21 @@ a {
   font-size: 14px;
 }
 
+.subbar .spacer {
+  flex: 1;
+}
+
+.subbar-link {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 0;
+  text-decoration: underline;
+}
+
 /* ------------------------------------------------------------------- cards */
 
 .card {
