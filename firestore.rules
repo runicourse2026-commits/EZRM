@@ -1,0 +1,43 @@
+rules_version = '2';
+
+// Paste these into: Firebase Console -> Firestore Database -> Rules -> Publish.
+//
+// The whole app is one company's internal tool, so the rule is simply "you must
+// be a signed-in account we created". Only the manager may change trucks or
+// touch payment records.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isManager() {
+      return signedIn() && request.auth.token.email == 'manager@dieselapp.com';
+    }
+
+    // Everyone signed in picks a truck from this list; only the manager edits it.
+    match /trucks/{truckId} {
+      allow read: if signedIn();
+      allow write: if isManager();
+    }
+
+    // Drivers and the mechanic add entries. Nobody edits or deletes after the
+    // fact — the log is the record.
+    match /logs/{logId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Cash paid to workers is manager-only, in both directions.
+    match /payments/{paymentId} {
+      allow read, create: if isManager();
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
