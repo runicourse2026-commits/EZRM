@@ -18,5 +18,7 @@ export default function handler(req, res) {
       privateKeyRaw.endsWith('-----END PRIVATE KEY-----\n'),
     privateKeyHasEscapedNewlines: privateKeyRaw.includes('\\n'),
     privateKeyHasRealNewlines: privateKeyRaw.includes('\n'),
+    privateKeyFirst15: privateKeyRaw.slice(0, 15),
+    privateKeyLast15: privateKeyRaw.slice(-15),
   });
 }
