@@ -2,14 +2,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import Layout, { FullPageSpinner } from '@/components/Layout';
 import { Field, Select } from '@/components/Fields';
 import { useLang } from '@/lib/i18n';
-import { useRequireRole } from '@/lib/auth';
+import { useAuth, useRequireRole } from '@/lib/auth';
 import {
   LOG_TYPES,
+  deleteLog,
   fetchLogs,
   fetchTrucks,
   formatDateTime,
   logTypeLabel,
+  restoreLog,
   toDate,
+  voidLog,
 } from '@/lib/db';
 import { downloadCsv, stamp } from '@/lib/csv';
 
@@ -31,6 +34,7 @@ function describe(entry, t) {
 
 export default function LogsPage() {
   const { t, lang } = useLang();
+  const { user } = useAuth();
   const { ready } = useRequireRole('manager');
 
   const [logs, setLogs] = useState([]);
@@ -40,6 +44,7 @@ export default function LogsPage() {
   const [truckId, setTruckId] = useState('all');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [voidedOnly, setVoidedOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +70,7 @@ export default function LogsPage() {
     const toTime = to ? new Date(`${to}T23:59:59`).getTime() : null;
 
     return logs.filter((entry) => {
+      if (voidedOnly && !entry.voided) return false;
       if (type !== 'all' && entry.type !== type) return false;
       if (truckId !== 'all' && entry.truckId !== truckId) return false;
       if (fromTime || toTime) {
@@ -75,9 +81,45 @@ export default function LogsPage() {
       }
       return true;
     });
-  }, [logs, type, truckId, from, to]);
+  }, [logs, type, truckId, from, to, voidedOnly]);
+
+  const voidedCount = useMemo(() => logs.filter((entry) => entry.voided).length, [logs]);
 
   if (!ready) return <FullPageSpinner />;
+
+  const patchEntry = (id, patch) =>
+    setLogs((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item))
+    );
+
+  const onVoid = async (entry) => {
+    if (!window.confirm(`${t('confirmVoid')}\n${describe(entry, t)}`)) return;
+    try {
+      await voidLog(entry.id, user?.uid);
+      patchEntry(entry.id, { voided: true });
+    } catch (err) {
+      console.error('[EZRM] void entry failed', err);
+    }
+  };
+
+  const onRestore = async (entry) => {
+    try {
+      await restoreLog(entry.id);
+      patchEntry(entry.id, { voided: false });
+    } catch (err) {
+      console.error('[EZRM] restore entry failed', err);
+    }
+  };
+
+  const onDelete = async (entry) => {
+    if (!window.confirm(`${t('confirmDeleteEntry')}\n${describe(entry, t)}`)) return;
+    try {
+      await deleteLog(entry.id);
+      setLogs((current) => current.filter((item) => item.id !== entry.id));
+    } catch (err) {
+      console.error('[EZRM] delete entry failed', err);
+    }
+  };
 
   const onExport = () => {
     const headers = [
@@ -93,6 +135,7 @@ export default function LogsPage() {
       t('tonnage'),
       t('workPerformed'),
       t('notes'),
+      t('voided'),
     ];
     const rows = filtered.map((entry) => [
       formatDateTime(entry.at, lang),
@@ -107,12 +150,28 @@ export default function LogsPage() {
       entry.tonnage ?? '',
       entry.work ?? '',
       entry.notes ?? '',
+      entry.voided ? t('yes') : '',
     ]);
     downloadCsv(`ezrm-logs-${stamp()}.csv`, headers, rows);
   };
 
   return (
     <Layout title={t('allLogs')} back="/manager">
+      {voidedCount > 0 && (
+        <div className="banner offline" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ flex: 1 }}>
+            ⛔ {t('voidedEntries')}: <strong>{voidedCount}</strong>
+          </span>
+          <button
+            type="button"
+            className="btn secondary small"
+            onClick={() => setVoidedOnly((v) => !v)}
+          >
+            {voidedOnly ? t('showAllEntries') : t('showVoidedOnly')}
+          </button>
+        </div>
+      )}
+
       <div className="card">
         <div className="filters">
           <Select label={t('filterType')} value={type} onChange={(e) => setType(e.target.value)}>
@@ -191,26 +250,60 @@ export default function LogsPage() {
                 <th>{t('user')}</th>
                 <th>{t('odometer')}</th>
                 <th>{t('details')}</th>
+                <th />
               </tr>
             </thead>
             <tbody>
               {!filtered.length && (
                 <tr>
-                  <td colSpan={6} className="muted center">
+                  <td colSpan={7} className="muted center">
                     {t('noEntries')}
                   </td>
                 </tr>
               )}
               {filtered.map((entry) => (
-                <tr key={entry.id}>
+                <tr key={entry.id} className={entry.voided ? 'flagged' : undefined}>
                   <td>{formatDateTime(entry.at, lang)}</td>
                   <td>{logTypeLabel(entry.type, t)}</td>
                   <td>{entry.truckNumber}</td>
                   <td>{entry.userName}</td>
                   <td>{entry.odometer ?? '—'}</td>
                   <td style={{ whiteSpace: 'normal', minWidth: 220 }}>
-                    {describe(entry, t)}{' '}
+                    <span className={entry.voided ? 'voided' : undefined}>
+                      {describe(entry, t)}
+                    </span>{' '}
+                    {entry.voided && <span className="pill voided-pill">⛔ {t('voided')}</span>}
                     {entry.pending && <span className="pill pending">{t('pendingSync')}</span>}
+                  </td>
+                  <td>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {entry.voided ? (
+                        <>
+                          <button
+                            type="button"
+                            className="btn danger small"
+                            onClick={() => onDelete(entry)}
+                          >
+                            🗑️ {t('deleteForever')}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn secondary small"
+                            onClick={() => onRestore(entry)}
+                          >
+                            ↩️ {t('restoreEntry')}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn secondary small"
+                          onClick={() => onVoid(entry)}
+                        >
+                          ⛔ {t('voidEntry')}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

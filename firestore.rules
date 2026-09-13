@@ -22,12 +22,18 @@ service cloud.firestore {
       allow write: if isManager();
     }
 
-    // Drivers and the mechanic add entries. Nobody edits or deletes after the
-    // fact — the log is the record.
+    // Drivers and the mechanic add entries. Mistakes are VOIDED, not edited:
+    // the author may only flip the voided flag on their own entry, so history
+    // is never rewritten. Only the manager can restore or truly delete.
     match /logs/{logId} {
       allow read: if signedIn();
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
-      allow update, delete: if false;
+      allow update: if isManager()
+        || (signedIn()
+            && resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['voided', 'voidedAt', 'voidedBy']));
+      allow delete: if isManager();
     }
 
     // Cash paid to workers is manager-only, in both directions.

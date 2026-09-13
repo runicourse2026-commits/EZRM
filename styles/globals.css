@@ -363,6 +363,23 @@ a {
   color: #7a4d00;
 }
 
+/* ---------------------------------------------------------- voided entries */
+
+.pill.voided-pill {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.voided {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+/* Whole table row of a voided entry gets a soft tint so the manager spots it. */
+tr.flagged td {
+  background: #fdf3f3;
+}
+
 /* ------------------------------------------------------------------ tables */
 
 .table-wrap {
