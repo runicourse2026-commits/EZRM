@@ -49,6 +49,23 @@ service cloud.firestore {
       allow write: if isManager();
     }
 
+    // Trip origins/destinations, defined by the manager, picked by drivers.
+    match /places/{placeId} {
+      allow read: if signedIn();
+      allow write: if isManager();
+    }
+
+    // Real display names for the short login ids; everyone sees them.
+    match /meta/staffNames {
+      allow read: if signedIn();
+      allow write: if isManager();
+    }
+
+    // Marker for the manager's monthly Excel backup download.
+    match /meta/backup {
+      allow read, write: if isManager();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

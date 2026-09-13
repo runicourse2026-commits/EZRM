@@ -3,6 +3,7 @@ import { useRouter } from 'next/router';
 import { useLang } from '@/lib/i18n';
 import { useAuth, homeForRole } from '@/lib/auth';
 import { useOnline } from '@/lib/useOnline';
+import { useDisplayName } from '@/lib/useDisplayName';
 
 export function LangToggle() {
   const { lang, toggle } = useLang();
@@ -18,6 +19,7 @@ export default function Layout({ title, subtitle, back, children }) {
   const { profile, logout } = useAuth();
   const router = useRouter();
   const online = useOnline();
+  const displayName = useDisplayName();
 
   const goBack = () => {
     if (typeof back === 'string') router.push(back);
@@ -57,7 +59,7 @@ export default function Layout({ title, subtitle, back, children }) {
       {profile && (
         <div className="subbar">
           <span>
-            {profile.name} · {t(profile.role)}
+            {displayName} · {t(profile.role)}
           </span>
           <span className="spacer" />
           <button

@@ -4,7 +4,13 @@ import { TextInput } from '@/components/Fields';
 import { useLang } from '@/lib/i18n';
 import { useRequireRole } from '@/lib/auth';
 import { fetchStaffUsers, setStaffPassword } from '@/lib/adminApi';
-import { fetchDriverTruckIds, fetchTrucks, setDriverTrucks } from '@/lib/db';
+import {
+  fetchDriverTruckIds,
+  fetchStaffNames,
+  fetchTrucks,
+  setDriverTrucks,
+  setStaffName,
+} from '@/lib/db';
 
 /** The password mini-form, shared by every account regardless of role. */
 function PasswordForm({ staff }) {
@@ -143,16 +149,64 @@ function TruckAssignForm({ staff, trucks }) {
   );
 }
 
-function StaffRow({ staff, trucks }) {
+/** Sets the person's real display name, shown in logs, exports and greetings. */
+function NameForm({ staff, currentName, onSaved }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(currentName ?? '');
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!value.trim()) return;
+    setBusy(true);
+    try {
+      await setStaffName(staff.uid, value);
+      setDone(true);
+      setOpen(false);
+      onSaved?.(staff.uid, value.trim());
+    } catch (err) {
+      console.error('[EZRM] set name failed', err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" className="btn secondary small" onClick={() => setOpen((v) => !v)}>
+        ✏️ {t('editName')}
+      </button>
+
+      {open && (
+        <form onSubmit={onSubmit} noValidate style={{ marginTop: 10 }}>
+          <TextInput
+            label={`${t('setNameFor')} ${staff.employeeId}`}
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button className="btn small" type="submit" disabled={busy}>
+            {busy ? t('saving') : t('save')}
+          </button>
+        </form>
+      )}
+      {done && <div className="banner success" style={{ marginTop: 10 }}>{t('nameSaved')}</div>}
+    </>
+  );
+}
+
+function StaffRow({ staff, trucks, name, onNameSaved }) {
   const { t } = useLang();
   return (
     <li style={{ display: 'block' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', flexWrap: 'wrap' }}>
         <div className="grow">
-          <div className="title">{staff.employeeId}</div>
+          <div className="title">{name ? `${name} (${staff.employeeId})` : staff.employeeId}</div>
           <div className="meta">{t(staff.role)}</div>
         </div>
-        <div className="btn-row" style={{ width: 'auto' }}>
+        <div className="btn-row" style={{ width: 'auto', flexWrap: 'wrap' }}>
+          <NameForm staff={staff} currentName={name} onSaved={onNameSaved} />
           {staff.role === 'driver' && <TruckAssignForm staff={staff} trucks={trucks} />}
           <PasswordForm staff={staff} />
         </div>
@@ -167,6 +221,7 @@ export default function StaffAccountsPage() {
 
   const [staff, setStaff] = useState([]);
   const [trucks, setTrucks] = useState([]);
+  const [names, setNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
@@ -174,10 +229,11 @@ export default function StaffAccountsPage() {
     if (!ready) return;
     setLoading(true);
     setError(null);
-    Promise.all([fetchStaffUsers(), fetchTrucks()])
-      .then(([staffList, truckList]) => {
+    Promise.all([fetchStaffUsers(), fetchTrucks(), fetchStaffNames()])
+      .then(([staffList, truckList, nameMap]) => {
         setStaff(staffList);
         setTrucks(truckList);
+        setNames(nameMap);
       })
       .catch((err) => {
         console.error('[EZRM] could not load staff accounts', err);
@@ -202,7 +258,15 @@ export default function StaffAccountsPage() {
         ) : (
           <ul className="list">
             {staff.map((s) => (
-              <StaffRow key={s.uid} staff={s} trucks={trucks} />
+              <StaffRow
+                key={s.uid}
+                staff={s}
+                trucks={trucks}
+                name={names[s.uid]}
+                onNameSaved={(uid, value) =>
+                  setNames((current) => ({ ...current, [uid]: value }))
+                }
+              />
             ))}
           </ul>
         )}

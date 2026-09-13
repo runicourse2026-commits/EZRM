@@ -5,16 +5,18 @@ import { useLang } from '@/lib/i18n';
 import { useAuth, useRequireRole } from '@/lib/auth';
 import {
   LOG_TYPES,
+  computeConsumption,
   deleteLog,
   fetchLogs,
+  fetchStaffNames,
   fetchTrucks,
   formatDateTime,
   logTypeLabel,
   restoreLog,
-  toDate,
   voidLog,
 } from '@/lib/db';
-import { downloadCsv, stamp } from '@/lib/csv';
+import { exportLogsCsv } from '@/lib/exportLogs';
+import { stamp } from '@/lib/csv';
 
 /** One-line human summary of an entry, for the table's Details column. */
 function describe(entry, t) {
@@ -32,6 +34,18 @@ function describe(entry, t) {
   }
 }
 
+const toInputDate = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate()
+  ).padStart(2, '0')}`;
+
+/** Default view: the last 30 days. Older months load by moving the from-date. */
+function defaultFrom() {
+  const date = new Date();
+  date.setDate(date.getDate() - 30);
+  return toInputDate(date);
+}
+
 export default function LogsPage() {
   const { t, lang } = useLang();
   const { user } = useAuth();
@@ -39,53 +53,58 @@ export default function LogsPage() {
 
   const [logs, setLogs] = useState([]);
   const [trucks, setTrucks] = useState([]);
+  const [names, setNames] = useState({});
   const [loading, setLoading] = useState(true);
   const [type, setType] = useState('all');
   const [truckId, setTruckId] = useState('all');
-  const [from, setFrom] = useState('');
+  const [from, setFrom] = useState(defaultFrom);
   const [to, setTo] = useState('');
   const [voidedOnly, setVoidedOnly] = useState(false);
 
+  // The date range drives the Firestore query itself, so reads stay
+  // proportional to the period being inspected; the rest of the filters are
+  // applied in memory on whatever the range brought back.
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [logList, truckList] = await Promise.all([fetchLogs(), fetchTrucks()]);
+      const fromDate = from ? new Date(`${from}T00:00:00`) : null;
+      const toDate = to ? new Date(`${to}T23:59:59`) : null;
+      const [logList, truckList, nameMap] = await Promise.all([
+        fetchLogs(fromDate, toDate),
+        fetchTrucks(),
+        fetchStaffNames(),
+      ]);
       setLogs(logList);
       setTrucks(truckList);
+      setNames(nameMap);
     } catch (err) {
       console.error('[EZRM] could not load logs', err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [from, to]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Filtering is in memory: the rows are already here, so this is instant and
-  // costs no extra Firestore reads as the manager changes filters.
-  const filtered = useMemo(() => {
-    const fromTime = from ? new Date(`${from}T00:00:00`).getTime() : null;
-    const toTime = to ? new Date(`${to}T23:59:59`).getTime() : null;
+  const filtered = useMemo(
+    () =>
+      logs.filter((entry) => {
+        if (voidedOnly && !entry.voided) return false;
+        if (type !== 'all' && entry.type !== type) return false;
+        if (truckId !== 'all' && entry.truckId !== truckId) return false;
+        return true;
+      }),
+    [logs, type, truckId, voidedOnly]
+  );
 
-    return logs.filter((entry) => {
-      if (voidedOnly && !entry.voided) return false;
-      if (type !== 'all' && entry.type !== type) return false;
-      if (truckId !== 'all' && entry.truckId !== truckId) return false;
-      if (fromTime || toTime) {
-        const time = toDate(entry.at)?.getTime();
-        if (!time) return false;
-        if (fromTime && time < fromTime) return false;
-        if (toTime && time > toTime) return false;
-      }
-      return true;
-    });
-  }, [logs, type, truckId, from, to, voidedOnly]);
-
+  const consumption = useMemo(() => computeConsumption(logs), [logs]);
   const voidedCount = useMemo(() => logs.filter((entry) => entry.voided).length, [logs]);
 
   if (!ready) return <FullPageSpinner />;
+
+  const displayName = (entry) => names[entry.uid] || entry.userName || '';
 
   const patchEntry = (id, patch) =>
     setLogs((current) =>
@@ -121,39 +140,8 @@ export default function LogsPage() {
     }
   };
 
-  const onExport = () => {
-    const headers = [
-      t('dateTime'),
-      t('type'),
-      t('truck'),
-      t('user'),
-      t('odometer'),
-      t('liters'),
-      t('gallons'),
-      t('origin'),
-      t('destination'),
-      t('tonnage'),
-      t('workPerformed'),
-      t('notes'),
-      t('voided'),
-    ];
-    const rows = filtered.map((entry) => [
-      formatDateTime(entry.at, lang),
-      logTypeLabel(entry.type, t),
-      entry.truckNumber ?? '',
-      entry.userName ?? '',
-      entry.odometer ?? '',
-      entry.liters ?? '',
-      entry.gallons ?? '',
-      entry.origin ?? '',
-      entry.destination ?? '',
-      entry.tonnage ?? '',
-      entry.work ?? '',
-      entry.notes ?? '',
-      entry.voided ? t('yes') : '',
-    ]);
-    downloadCsv(`ezrm-logs-${stamp()}.csv`, headers, rows);
-  };
+  const onExport = () =>
+    exportLogsCsv(filtered, { t, lang, names, filename: `ezrm-logs-${stamp()}.csv` });
 
   return (
     <Layout title={t('allLogs')} back="/manager">
@@ -261,52 +249,62 @@ export default function LogsPage() {
                   </td>
                 </tr>
               )}
-              {filtered.map((entry) => (
-                <tr key={entry.id} className={entry.voided ? 'flagged' : undefined}>
-                  <td>{formatDateTime(entry.at, lang)}</td>
-                  <td>{logTypeLabel(entry.type, t)}</td>
-                  <td>{entry.truckNumber}</td>
-                  <td>{entry.userName}</td>
-                  <td>{entry.odometer ?? '—'}</td>
-                  <td style={{ whiteSpace: 'normal', minWidth: 220 }}>
-                    <span className={entry.voided ? 'voided' : undefined}>
-                      {describe(entry, t)}
-                    </span>{' '}
-                    {entry.voided && <span className="pill voided-pill">⛔ {t('voided')}</span>}
-                    {entry.pending && <span className="pill pending">{t('pendingSync')}</span>}
-                  </td>
-                  <td>
-                    <div style={{ display: 'flex', gap: 6 }}>
-                      {entry.voided ? (
-                        <>
-                          <button
-                            type="button"
-                            className="btn danger small"
-                            onClick={() => onDelete(entry)}
-                          >
-                            🗑️ {t('deleteForever')}
-                          </button>
+              {filtered.map((entry) => {
+                const usage = consumption[entry.id];
+                return (
+                  <tr key={entry.id} className={entry.voided ? 'flagged' : undefined}>
+                    <td>{formatDateTime(entry.at, lang)}</td>
+                    <td>{logTypeLabel(entry.type, t)}</td>
+                    <td>{entry.truckNumber}</td>
+                    <td>{displayName(entry)}</td>
+                    <td>{entry.odometer ?? '—'}</td>
+                    <td style={{ whiteSpace: 'normal', minWidth: 220 }}>
+                      <span className={entry.voided ? 'voided' : undefined}>
+                        {describe(entry, t)}
+                        {usage && (
+                          <span className="muted">
+                            {' '}
+                            · {usage.km} {t('km')}
+                            {usage.rate ? ` · ${usage.rate.toFixed(1)} ${t('kmPerLiter')}` : ''}
+                          </span>
+                        )}
+                      </span>{' '}
+                      {entry.voided && <span className="pill voided-pill">⛔ {t('voided')}</span>}
+                      {entry.pending && <span className="pill pending">{t('pendingSync')}</span>}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {entry.voided ? (
+                          <>
+                            <button
+                              type="button"
+                              className="btn danger small"
+                              onClick={() => onDelete(entry)}
+                            >
+                              🗑️ {t('deleteForever')}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn secondary small"
+                              onClick={() => onRestore(entry)}
+                            >
+                              ↩️ {t('restoreEntry')}
+                            </button>
+                          </>
+                        ) : (
                           <button
                             type="button"
                             className="btn secondary small"
-                            onClick={() => onRestore(entry)}
+                            onClick={() => onVoid(entry)}
                           >
-                            ↩️ {t('restoreEntry')}
+                            ⛔ {t('voidEntry')}
                           </button>
-                        </>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn secondary small"
-                          onClick={() => onVoid(entry)}
-                        >
-                          ⛔ {t('voidEntry')}
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

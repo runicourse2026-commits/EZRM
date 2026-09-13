@@ -1,14 +1,49 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Layout, { FullPageSpinner } from '@/components/Layout';
-import { NumberInput, TextInput } from '@/components/Fields';
+import { NumberInput, Select, TextInput } from '@/components/Fields';
 import TruckSelect, { useTruckPicker } from '@/components/TruckSelect';
 import RecentEntries from '@/components/RecentEntries';
 import SaveStatus from '@/components/SaveStatus';
 import { useLang } from '@/lib/i18n';
 import { useAuth, useRequireRole } from '@/lib/auth';
-import { addLog } from '@/lib/db';
+import { addLog, fetchPlaces } from '@/lib/db';
 import { useSaveLog } from '@/lib/useSaveLog';
 import { numberOrText, validateRequired } from '@/lib/validate';
+
+const OTHER = '__other__';
+
+/**
+ * Origin/destination come from the manager's places list — tapping beats
+ * typing for this crew, and the exports get one spelling per place. "Other"
+ * falls back to free text, and if no places are defined yet the fields are
+ * plain text like before.
+ */
+function PlaceField({ label, places, choice, setChoice, text, setText, error }) {
+  const { t } = useLang();
+
+  if (!places.length) {
+    return (
+      <TextInput label={label} value={text} error={error} onChange={(e) => setText(e.target.value)} />
+    );
+  }
+
+  return (
+    <>
+      <Select label={label} value={choice} error={error} onChange={(e) => setChoice(e.target.value)}>
+        <option value="">—</option>
+        {places.map((place) => (
+          <option key={place.id} value={place.name}>
+            {place.name}
+          </option>
+        ))}
+        <option value={OTHER}>{t('otherPlace')}</option>
+      </Select>
+      {choice === OTHER && (
+        <TextInput value={text} error={error} onChange={(e) => setText(e.target.value)} />
+      )}
+    </>
+  );
+}
 
 export default function TripLogPage() {
   const { t } = useLang();
@@ -17,12 +52,27 @@ export default function TripLogPage() {
   const picker = useTruckPicker(user?.uid, { restrict: true });
   const { save, saving, status, error, saved } = useSaveLog();
 
-  const [origin, setOrigin] = useState('');
-  const [destination, setDestination] = useState('');
+  const [places, setPlaces] = useState([]);
+  const [originChoice, setOriginChoice] = useState('');
+  const [originText, setOriginText] = useState('');
+  const [destChoice, setDestChoice] = useState('');
+  const [destText, setDestText] = useState('');
   const [tonnage, setTonnage] = useState('');
   const [errors, setErrors] = useState({});
 
+  useEffect(() => {
+    fetchPlaces()
+      .then(setPlaces)
+      .catch((err) => console.error('[EZRM] could not load places', err));
+  }, []);
+
   if (!ready) return <FullPageSpinner />;
+
+  const resolve = (choice, text) =>
+    places.length ? (choice === OTHER ? text.trim() : choice) : text.trim();
+
+  const origin = resolve(originChoice, originText);
+  const destination = resolve(destChoice, destText);
 
   const onSubmit = async (e) => {
     e.preventDefault();
@@ -40,17 +90,15 @@ export default function TripLogPage() {
       truck: picker.truck,
       profile,
       uid: user.uid,
-      data: {
-        origin: origin.trim(),
-        destination: destination.trim(),
-        tonnage: numberOrText(tonnage),
-      },
+      data: { origin, destination, tonnage: numberOrText(tonnage) },
     };
 
     await save(() => addLog(entry), entry, () => {
       picker.remember();
-      setOrigin('');
-      setDestination('');
+      setOriginChoice('');
+      setOriginText('');
+      setDestChoice('');
+      setDestText('');
       setTonnage('');
       setErrors({});
     });
@@ -63,18 +111,24 @@ export default function TripLogPage() {
 
         <TruckSelect picker={picker} error={errors.truck} />
 
-        <TextInput
+        <PlaceField
           label={t('origin')}
-          value={origin}
+          places={places}
+          choice={originChoice}
+          setChoice={setOriginChoice}
+          text={originText}
+          setText={setOriginText}
           error={errors.origin}
-          onChange={(e) => setOrigin(e.target.value)}
         />
 
-        <TextInput
+        <PlaceField
           label={t('destination')}
-          value={destination}
+          places={places}
+          choice={destChoice}
+          setChoice={setDestChoice}
+          text={destText}
+          setText={setDestText}
           error={errors.destination}
-          onChange={(e) => setDestination(e.target.value)}
         />
 
         <NumberInput
